@@ -151,19 +151,84 @@ The app:
 - Auto-detects the Arduino's serial port (by USB description, falling
   back to the first `/dev/ttyACM*` or `/dev/ttyUSB*`); auto-reconnects
   if the Arduino is unplugged/replugged
-- Displays incoming text live, full-screen, touch-friendly
+- Displays incoming text live, full-screen, touch-friendly, no window
+  decorations (borderless kiosk via `overrideredirect`, not the
+  `-fullscreen` attribute — more reliable across window managers,
+  see "UI implementation notes" below)
 - Writes an append-only log file per session to `~/printer_logs/`
-- **Send to share** — pushes the current log to an SMB share (Windows)
-  or a local/mounted path, configurable via the **Options** dialog
-  (share path, subfolder, username, password — stored in
-  `~/.printer_monitor.json`, file permissions `600`)
-- **Window / Fullscreen** toggle and **Clear** button, sized for touch
+- **Three languages** — Russian / English / Latvian, switchable live
+  from the Options dialog, no restart needed
+- **Send to share** and **Power off** — two large buttons split evenly
+  across the footer. Send pushes the current log to an SMB share
+  (Windows) or a local/mounted path, configurable via the **Options**
+  dialog reachable from the menu (share path, subfolder, username,
+  password — stored in `~/.printer_monitor.json`, file permissions
+  `600`). Power off shows a Yes/No confirmation, then runs
+  `sudo shutdown -h now`
+- **☰ Menu button** (footer, right) opens a popup with: Clear screen,
+  Minimize, Options, Close program, Cancel
+- **Minimize** hides the main window (`withdraw()`) and shows a small
+  floating "▲" button in the bottom-right corner to bring it back —
+  deliberately not implemented via `iconify()`/taskbar (see notes below)
+
+### UI implementation notes (for future maintainers)
+
+A few non-obvious fixes are baked into the current version — worth
+knowing before "simplifying" them back:
+
+- **Footer must be packed with `side=tk.BOTTOM` before the text area
+  is packed.** If the scrollable text area is packed first with
+  `expand=True` and the footer afterwards, Tkinter's packer will
+  collapse the footer to ~1px the moment total requested height
+  exceeds the screen — not the text area, which is what should
+  shrink. Pack footer first, `side=BOTTOM`, text area last.
+- **Custom dialogs, not `tkinter.messagebox`.** The main window is
+  `overrideredirect(True)` (no decorations). On this project's window
+  manager, a normal WM-managed dialog (which `messagebox` creates)
+  could end up stacked *behind* the borderless main window while
+  still holding an input grab — the whole app looked frozen with no
+  visible dialog. All confirmations/alerts now use a hand-rolled
+  `_modal_dialog()` Toplevel that is *also* `overrideredirect(True)`,
+  keeping it in the same stacking class as the main window.
+- **Minimize doesn't use `iconify()`.** The obvious approach
+  (`overrideredirect(False)` → `iconify()`, catching restore via
+  `<Map>`/`<Unmap>`) turned out to depend on WM cooperation that
+  wasn't reliable here — toggling `overrideredirect` on a live window
+  didn't consistently hand it back to the WM. Instead, minimize just
+  `withdraw()`s the root (pure Tk, no WM involved) and spawns an
+  independent floating Toplevel button to bring it back — Toplevels
+  stay visible even while their parent is withdrawn.
 
 ### Desktop launcher
 
 `printer-monitor.desktop` + `printer-monitor.png` — copy both to
 `~/Desktop/` (and optionally `~/.local/share/applications/`) for a
 tap-to-launch icon.
+
+### Autostart on boot
+
+`printer-monitor-autostart.desktop` — copy to
+`~/.config/autostart/printer-monitor.desktop`. Includes an 8-second
+delay before launch to let the desktop session settle. Requires
+desktop autologin to be enabled (`sudo raspi-config` → System Options
+→ Boot → Desktop Autologin) — otherwise there's no session to
+autostart into.
+
+### Icons
+
+Small PNGs loaded via `tk.PhotoImage` (no Pillow needed at runtime —
+Tk 8.6+ reads PNG natively). Must sit next to `printer_monitor.py`:
+`icon_upload.png` (send to share), `icon_power.png` (shutdown),
+`icon_minimize.png` (minimize). If a file is missing, the affected
+button silently falls back to a blank image rather than crashing.
+
+### End-user documentation
+
+Operator-facing manuals (not this technical README) exist in Russian
+and Latvian: `Руководство_пользователя_RU.md` /
+`Lietotaja_rokasgramata_LV.md`. They cover the UI from a "what do I
+tap and what does this message mean" angle — hand these to whoever
+runs the machine day to day, not this file.
 
 ### On-screen keyboard (if needed for config screens)
 
@@ -184,12 +249,35 @@ Preferences → Raspberry Pi Configuration → Display → On-screen Keyboard
   practice, but a proper ESC/P parser would eliminate the last
   theoretical edge case. OKI's Hex Dump Mode is a good way to capture
   raw bytes for this if it ever becomes necessary.
-- **Autostart on boot**: not yet configured — currently launched
-  manually or via the desktop icon.
+- **Time sync on an isolated network**: the machine's network blocks
+  outbound NTP (UDP 123) entirely — confirmed via a local NTP server
+  that itself failed root-distance checks, then via `chrony`/
+  `timesyncd` both timing out on every public pool. HTTPS (443) is
+  open, so time sync now runs via `htpdate` against a `cron` job
+  (`@reboot`, retried every 5s for up to 30 attempts to ride out slow
+  network bring-up, plus hourly). `systemd-timesyncd`/`chrony` are
+  disabled to avoid them fighting over the clock.
+- **USB enumeration instability**: seen intermittently when
+  reconnecting the Arduino (`device descriptor read/64, error -110`,
+  `unable to enumerate USB device` in `dmesg`) — same symptom appeared
+  across different physical ports, with a USB touchscreen and a data
+  drive also sharing the Pi's internal hub. Not yet root-caused;
+  candidates are the USB cable, the connector on the Nano Every, or
+  hub contention with the other devices. Worth re-testing with a
+  known-good short data cable and the Arduino on the Pi 4's other USB
+  controller group (ports are split into two internal hub pairs).
 - **Long-run stability**: works correctly against real machine data
   (verified with full formatted multi-column reports); longer-term
   soak testing still recommended before treating this as fully
   production-hardened.
+
+### Resolved since first written
+
+- ~~Autostart on boot: not yet configured~~ — done, see
+  `printer-monitor-autostart.desktop` above.
+- ~~Window doesn't reliably go fullscreen / dialogs freeze the app~~
+  — both were the same root cause (WM interaction with
+  `overrideredirect`); see "UI implementation notes" above.
 
 ---
 
